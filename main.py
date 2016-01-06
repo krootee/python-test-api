@@ -1,134 +1,81 @@
-import sys, getopt
 import json
-import collections
 import base64
 import os
 import urllib.request
+from urllib.error import HTTPError
+from time import sleep
 
 
-def main(argv):
-    inputfilename = ''
-    outputfilename = ''
-    try:
-        opts, args = getopt.getopt(argv, "hi:o:", ["ifile=", "ofile="])
-    except getopt.GetoptError:
-        print('generatejson.py -i  -o ')
-        sys.exit(2)
-    for opt, arg in opts:
-        if opt == '-h':
-            print('generatejson.py -i  -o ')
-            print('Input File format:')
-            print('FileURI Feature:maxResults ...')
-            sys.exit()
-        elif opt in ("-i", "--ifile"):
-            inputfilename = arg
-        elif opt in ("-o", "--ofile"):
-            outputfilename = arg
-
-    inputFile = open(inputfilename, 'r')
-    lineCount = 0
-    requestsJsonObj = {}
-    requestArray = []
-    for inputLine in inputFile:
-        lineCount = lineCount + 1
-        print(inputLine)
-        wordCount = 0
-        contentJsonObj = {}
-        imageJsonObj = {}
-        featureJsonObj = []
-        lineWords = inputLine.split(" ")
-        if len(lineWords) < 2:
-            print("Invalid input file format")
-            print("Valid Format: FileURI feature:maxResults feature:maxResults ....")
-            sys.exit()
-        for word in lineWords:
-            if wordCount == 0:
-                imageFile = open(word, 'rb')
-                contentJsonObj['content'] = base64.b64encode(imageFile.read()).decode('utf-8')
-                # print("img:" + word)
-            else:
-                detectValues = word.split(":")
-                valueCount = 0
-                featureDict = collections.OrderedDict()
-                for values in detectValues:
-                    if valueCount == 0:
-                        detectionType = getDetectionType(values)
-                        featureDict['type'] = detectionType
-                        print("detect:" + detectionType)
-                    else:
-                        maxResults = values.rstrip()
-                        featureDict['maxResults'] = maxResults
-                        print("results: " + maxResults)
-                    valueCount = valueCount + 1
-                featureJsonObj.append(featureDict)
-            wordCount = wordCount + 1
-        imageJsonObj['features'] = featureJsonObj
-        imageJsonObj['image'] = contentJsonObj
-        requestArray.append(imageJsonObj)
-    requestsJsonObj['requests'] = requestArray
-    with open(outputfilename, 'w') as outfile:
-        json.dump(requestsJsonObj, outfile)
-
-
-def getDetectionType(detectNum):
-    if detectNum == "1":
-        return "FACE_DETECTION"
-    elif detectNum == "2":
-        return "LANDMARK_DETECTION"
-    elif detectNum == "3":
-        return "LOGO_DETECTION"
-    elif detectNum == "4":
-        return "LABEL_DETECTION"
-    elif detectNum == "5":
-        return "TEXT_DETECTION"
-    elif detectNum == "6":
-        return "SAFE_SEARCH_DETECTION"
-    return "TYPE_UNSPECIFIED"
-
-
-def find_all_images(data_path):
+def find_all_images(files_path):
     images = []
-    for root, dirs, files in os.walk(data_path):
+    for root, dirs, files in os.walk(files_path):
         for file in files:
             if file.endswith(".jpg"):
-                file_path = os.path.join(root, file).replace(data_path, "")
+                file_path = os.path.join(root, file).replace(files_path, "")
                 images.append(file_path)
     return images
 
+
 def generate_vision_api_json(filename):
-    requestsJsonObj = {}
-    requestArray = []
-    imageJsonObj = {}
-    featureJsonObj = []
-    featureDict = collections.OrderedDict()
-    featureDict['type'] = "TEXT_DETECTION"
-    featureDict['maxResults'] = 10
-    featureJsonObj.append(featureDict)
-    featureDict['type'] = "SAFE_SEARCH_DETECTION"
-    featureDict['maxResults'] = 10
-    featureJsonObj.append(featureDict)
-    imageJsonObj['features'] = featureJsonObj
+    requests_json_object = {}
+    request_array = []
     file = open(filename, "rb")
-    imageJsonObj['image'] = base64.b64encode(file.read()).decode('utf-8')
+    image_json_object = {'features': [{"type": "TEXT_DETECTION", "maxResults": 10},
+                                      {"type": "SAFE_SEARCH_DETECTION", "maxResults": 10}],
+                         'image': {'content': base64.b64encode(file.read()).decode('utf-8')}}
     file.close()
-    requestArray.append(imageJsonObj)
-    requestsJsonObj['requests'] = requestArray
-    return requestsJsonObj
+    request_array.append(image_json_object)
+    requests_json_object['requests'] = request_array
+    return requests_json_object
+
+
+def process_google_vision_api(file_request_json):
+    json_data = json.dumps(file_request_json).encode('utf-8')
+    req = urllib.request.Request(
+        url='https://vision.googleapis.com/v1alpha1/images:annotate?key=')
+    req.add_header('Content-Type', 'application/json')
+    response = urllib.request.urlopen(req, json_data)
+    return json.loads(response.read().decode("utf-8"))['responses'][0]
 
 
 if __name__ == "__main__":
     data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data//")
     print(data_path)
     images_to_process = find_all_images(data_path)
+    html_table = '<html><body><table border="1"><td><b>Image</b></td><td width="300"><b>Path</b></td>' \
+                 '<td width="250"><b>Safe search results</b></td><td><b>Text search results</b></td>'
     for i, image_path in enumerate(images_to_process):
-        print(i, image_path)
         request_json = generate_vision_api_json(os.path.join(data_path, image_path))
-        with open(".//google-vision-api.json", 'w') as outfile:
-            json.dump(request_json, outfile)
-        json_data = open(".//google-vision-api.json", 'rb').read()
-        #json_data = json.dumps(request_json)
-        req = urllib.request.Request(url='https://vision.googleapis.com/v1alpha1/images:annotate?key=<key>')
-        req.add_header('Content-Type', 'application/json')
-        response = urllib.request.urlopen(req, json_data)
-        print(response.text)
-    # main(sys.argv[1:])
+        answer_json = {}
+        safeText = ''
+        ocrText = ''
+        while True:
+            try:
+                print('Sending image number {}, url "{}"'.format(i, image_path))
+                answer_json = process_google_vision_api(request_json)
+                break
+            except HTTPError as err:
+                safeText = 'Error processing Google Vision API request: ' + err.reason
+                print(safeText)
+                print('Retrying in 1 second...')
+                sleep(1)
+        if 'safeSearchAnnotation' in answer_json:
+            safeText = 'Adult: {}<br>Violence: {}<br>' \
+                       'Medical: {}<br>Spoof: {}<br>'.format(answer_json['safeSearchAnnotation']['adult'],
+                                                             answer_json['safeSearchAnnotation']['violence'],
+                                                             answer_json['safeSearchAnnotation']['medical'],
+                                                             answer_json['safeSearchAnnotation']['spoof'])
+            print('Safe search:', answer_json['safeSearchAnnotation'])
+        if 'textAnnotations' in answer_json:
+            ocrText = json.dumps(answer_json['textAnnotations']).encode('utf-8')
+            print('Text search:', answer_json['textAnnotations'])
+        html_table += '<tr><td><a href="{}"><img src="file:///{}" width="300px" /></a>' \
+                      '</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(os.path.join(data_path, image_path),
+                                                                           os.path.join(data_path, image_path),
+                                                                           image_path,
+                                                                           safeText,
+                                                                           ocrText)
+        final_html = html_table + '</table></body></html>'
+        html_file = open('.//results.html', "w")
+        html_file.write(html_table)
+        html_file.close()
