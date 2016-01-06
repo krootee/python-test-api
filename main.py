@@ -2,6 +2,8 @@ import sys, getopt
 import json
 import collections
 import base64
+import os
+import urllib.request
 
 
 def main(argv):
@@ -81,8 +83,52 @@ def getDetectionType(detectNum):
         return "TEXT_DETECTION"
     elif detectNum == "6":
         return "SAFE_SEARCH_DETECTION"
-    return "TYPE_UNSPECIFIED";
+    return "TYPE_UNSPECIFIED"
+
+
+def find_all_images(data_path):
+    images = []
+    for root, dirs, files in os.walk(data_path):
+        for file in files:
+            if file.endswith(".jpg"):
+                file_path = os.path.join(root, file).replace(data_path, "")
+                images.append(file_path)
+    return images
+
+def generate_vision_api_json(filename):
+    requestsJsonObj = {}
+    requestArray = []
+    imageJsonObj = {}
+    featureJsonObj = []
+    featureDict = collections.OrderedDict()
+    featureDict['type'] = "TEXT_DETECTION"
+    featureDict['maxResults'] = 10
+    featureJsonObj.append(featureDict)
+    featureDict['type'] = "SAFE_SEARCH_DETECTION"
+    featureDict['maxResults'] = 10
+    featureJsonObj.append(featureDict)
+    imageJsonObj['features'] = featureJsonObj
+    file = open(filename, "rb")
+    imageJsonObj['image'] = base64.b64encode(file.read()).decode('utf-8')
+    file.close()
+    requestArray.append(imageJsonObj)
+    requestsJsonObj['requests'] = requestArray
+    return requestsJsonObj
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data//")
+    print(data_path)
+    images_to_process = find_all_images(data_path)
+    for i, image_path in enumerate(images_to_process):
+        print(i, image_path)
+        request_json = generate_vision_api_json(os.path.join(data_path, image_path))
+        with open(".//google-vision-api.json", 'w') as outfile:
+            json.dump(request_json, outfile)
+        json_data = open(".//google-vision-api.json", 'rb').read()
+        #json_data = json.dumps(request_json)
+        req = urllib.request.Request(url='https://vision.googleapis.com/v1alpha1/images:annotate?key=<key>')
+        req.add_header('Content-Type', 'application/json')
+        response = urllib.request.urlopen(req, json_data)
+        print(response.text)
+    # main(sys.argv[1:])
